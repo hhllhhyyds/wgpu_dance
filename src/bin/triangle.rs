@@ -20,7 +20,8 @@ struct WgpuApp {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     size_changed: bool,
-    render_pipeline: wgpu::RenderPipeline,
+    render_pipelines: [wgpu::RenderPipeline; 2],
+    current_pipeline_index: usize,
 }
 
 impl WgpuApp {
@@ -78,23 +79,70 @@ impl WgpuApp {
                 bind_group_layouts: &[],
                 push_constant_ranges: &[],
             });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let shader_a = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader_a.wgsl").into()),
+        });
+        let render_pipeline_a = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &shader_a,
                 compilation_options: Default::default(),
                 entry_point: Some("vs_main"), // 1.
                 buffers: &[],                 // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
-                module: &shader,
+                module: &shader_a,
+                compilation_options: Default::default(),
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // 4.
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: Some(wgpu::Face::Back),
+                // 将此设置为 Fill 以外的任何值都要需要开启 Feature::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // 需要开启 Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // 需要开启 Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None, // 1.
+            multisample: wgpu::MultisampleState {
+                count: 1,                         // 2.
+                mask: !0,                         // 3.
+                alpha_to_coverage_enabled: false, // 4.
+            },
+            multiview: None, // 5.
+            cache: None,
+        });
+
+        let shader_b = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader_b.wgsl").into()),
+        });
+        let render_pipeline_b = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader_b,
+                compilation_options: Default::default(),
+                entry_point: Some("vs_main"), // 1.
+                buffers: &[],                 // 2.
+            },
+            fragment: Some(wgpu::FragmentState {
+                // 3.
+                module: &shader_b,
                 compilation_options: Default::default(),
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -134,7 +182,8 @@ impl WgpuApp {
             config,
             size,
             size_changed: false,
-            render_pipeline,
+            render_pipelines: [render_pipeline_a, render_pipeline_b],
+            current_pipeline_index: 0,
         }
     }
 
@@ -184,7 +233,7 @@ impl WgpuApp {
                 })],
                 ..Default::default()
             });
-            render_pass.set_pipeline(&self.render_pipeline); // 2.
+            render_pass.set_pipeline(&self.render_pipelines[self.current_pipeline_index]); // 2.
             render_pass.draw(0..3, 0..1); // 3.
         }
 
@@ -194,8 +243,19 @@ impl WgpuApp {
         Ok(())
     }
 
-    fn keyboard_input(&mut self, _event: &KeyEvent) -> bool {
-        false
+    fn keyboard_input(&mut self, event: &KeyEvent) -> bool {
+        match event {
+            KeyEvent {
+                physical_key: PhysicalKey::Code(KeyCode::Space),
+                state: ElementState::Pressed,
+                ..
+            } => {
+                self.current_pipeline_index += 1;
+                self.current_pipeline_index %= self.render_pipelines.len();
+                true
+            }
+            _ => false,
+        }
     }
 
     fn mouse_click(&mut self, _state: ElementState, _button: MouseButton) -> bool {
@@ -222,6 +282,14 @@ impl WgpuApp {
 #[derive(Default)]
 struct WgpuAppHandler {
     app: Rc<Mutex<Option<WgpuApp>>>,
+    app_name: String,
+}
+
+impl WgpuAppHandler {
+    fn with_name(mut self, name: &str) -> Self {
+        self.app_name = name.to_string();
+        self
+    }
 }
 
 impl ApplicationHandler for WgpuAppHandler {
@@ -230,7 +298,7 @@ impl ApplicationHandler for WgpuAppHandler {
             return;
         }
 
-        let window_attributes = Window::default_attributes().with_title("triangle");
+        let window_attributes = Window::default_attributes().with_title(&self.app_name);
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
         let wgpu_app = pollster::block_on(WgpuApp::new(window));
@@ -265,13 +333,14 @@ impl ApplicationHandler for WgpuAppHandler {
                     app.set_window_resized(physical_size);
                 }
             }
-            WindowEvent::KeyboardInput {
-                event: KeyEvent { physical_key, .. },
-                ..
-            } => match physical_key {
-                PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
-                _ => {}
-            },
+            WindowEvent::KeyboardInput { event, .. } => {
+                let phy_key = event.physical_key;
+                match phy_key {
+                    PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
+                    _ => {}
+                }
+                app.keyboard_input(&event);
+            }
             WindowEvent::RedrawRequested => {
                 // surface 重绘事件
                 app.window.pre_present_notify();
@@ -295,6 +364,6 @@ fn main() -> Result<(), impl std::error::Error> {
     wgpu_dance::init_logger();
 
     let events_loop = EventLoop::new().unwrap();
-    let mut app = WgpuAppHandler::default();
+    let mut app = WgpuAppHandler::default().with_name("wgpu triangle");
     events_loop.run_app(&mut app)
 }
