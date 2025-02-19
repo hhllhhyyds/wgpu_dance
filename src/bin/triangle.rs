@@ -20,6 +20,7 @@ struct WgpuApp {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     size_changed: bool,
+    render_pipeline: wgpu::RenderPipeline,
 }
 
 impl WgpuApp {
@@ -71,6 +72,60 @@ impl WgpuApp {
         };
         surface.configure(&device, &config);
 
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[],
+                push_constant_ranges: &[],
+            });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                compilation_options: Default::default(),
+                entry_point: Some("vs_main"), // 1.
+                buffers: &[],                 // 2.
+            },
+            fragment: Some(wgpu::FragmentState {
+                // 3.
+                module: &shader,
+                compilation_options: Default::default(),
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // 4.
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: Some(wgpu::Face::Back),
+                // 将此设置为 Fill 以外的任何值都要需要开启 Feature::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // 需要开启 Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // 需要开启 Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None, // 1.
+            multisample: wgpu::MultisampleState {
+                count: 1,                         // 2.
+                mask: !0,                         // 3.
+                alpha_to_coverage_enabled: false, // 4.
+            },
+            multiview: None, // 5.
+            cache: None,
+        });
+
         Self {
             window,
             surface,
@@ -79,6 +134,7 @@ impl WgpuApp {
             config,
             size,
             size_changed: false,
+            render_pipeline,
         }
     }
 
@@ -111,7 +167,7 @@ impl WgpuApp {
             });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -128,6 +184,8 @@ impl WgpuApp {
                 })],
                 ..Default::default()
             });
+            render_pass.set_pipeline(&self.render_pipeline); // 2.
+            render_pass.draw(0..3, 0..1); // 3.
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
