@@ -162,7 +162,7 @@ impl ApplicationHandler for WgpuAppHandler {
 
         let rt = Runtime::new().unwrap();
 
-        let window_attributes = Window::default_attributes().with_title("create window");
+        let window_attributes = Window::default_attributes().with_title("triangle");
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
         let wgpu_app = rt.block_on(WgpuApp::new(window));
