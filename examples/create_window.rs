@@ -109,6 +109,8 @@ impl WgpuApp {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        self.resize_surface_if_needed();
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -145,8 +147,6 @@ impl WgpuApp {
 
         Ok(())
     }
-
-    fn update(&mut self) {}
 }
 
 #[derive(Default)]

@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use wgpu::util::DeviceExt;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -12,6 +13,24 @@ use winit::{
 };
 
 use tokio::runtime::Runtime;
+
+use wgpu_dance::Vertex;
+
+// lib.rs
+const VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [0.0, 0.5, 0.0],
+        color: [1.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [-0.5, -0.5, 0.0],
+        color: [0.0, 1.0, 0.0],
+    },
+    Vertex {
+        position: [0.5, -0.5, 0.0],
+        color: [0.0, 0.0, 1.0],
+    },
+];
 
 struct WgpuApp {
     window: Arc<Window>,
@@ -26,6 +45,8 @@ struct WgpuApp {
     size_changed: bool,
 
     render_pipeline: wgpu::RenderPipeline,
+
+    vertex_buffer: wgpu::Buffer,
 }
 
 impl WgpuApp {
@@ -92,7 +113,7 @@ impl WgpuApp {
                 module: &shader,
                 compilation_options: Default::default(),
                 entry_point: Some("vs_main"), // 1.
-                buffers: &[],                 // 2.
+                buffers: &[Vertex::desc()],   // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -128,6 +149,12 @@ impl WgpuApp {
             cache: None,
         });
 
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
         Self {
             window,
 
@@ -141,6 +168,8 @@ impl WgpuApp {
             size_changed: false,
 
             render_pipeline,
+
+            vertex_buffer,
         }
     }
 
@@ -168,6 +197,8 @@ impl WgpuApp {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        self.resize_surface_if_needed();
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -198,7 +229,8 @@ impl WgpuApp {
                 ..Default::default()
             });
             render_pass.set_pipeline(&self.render_pipeline); // 2.
-            render_pass.draw(0..3, 0..1); // 3.
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..(VERTICES.len() as u32), 0..1); // 3.
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -207,7 +239,7 @@ impl WgpuApp {
         Ok(())
     }
 
-    fn update(&mut self) {}
+    // fn update(&mut self) {}
 }
 
 #[derive(Default)]
