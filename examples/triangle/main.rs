@@ -14,7 +14,8 @@ use winit::{
 
 use tokio::runtime::Runtime;
 
-use wgpu_dance::Vertex;
+pub mod vertex;
+use vertex::Vertex;
 
 // lib.rs
 const VERTICES: &[Vertex] = &[
