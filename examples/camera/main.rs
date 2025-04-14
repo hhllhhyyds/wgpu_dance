@@ -1,26 +1,17 @@
-use std::{
-    ops::{Deref, DerefMut},
-    sync::{Arc, Mutex},
-};
-
-use wgpu::util::DeviceExt;
-use winit::{
-    application::ApplicationHandler,
-    dpi::PhysicalSize,
-    event::{KeyEvent, WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
-    window::{Window, WindowId},
-};
-
-use tokio::runtime::Runtime;
-
-pub mod camera;
-pub mod texture;
 pub mod vertex;
 
-struct WgpuApp {
-    window: Arc<Window>,
+use std::sync::Arc;
 
+use wgpu_dance::{
+    app::{WgpuApp, WgpuAppHandler},
+    camera::{Camera, CameraBuddle},
+    model::{Model, RenderVertex},
+    texture::Texture,
+};
+
+use winit::{dpi::PhysicalSize, event::KeyEvent, event_loop::EventLoop, window::Window};
+
+struct App {
     device: wgpu::Device,
     queue: wgpu::Queue,
 
@@ -32,20 +23,14 @@ struct WgpuApp {
 
     render_pipeline: wgpu::RenderPipeline,
 
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
+    model: Model<vertex::Vertex>,
 
     diffuse_bind_group: wgpu::BindGroup,
 
-    camera: camera::Camera,
-    camera_controller: camera::CameraController,
-    camera_uniform: camera::CameraUniform,
-    camera_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
+    camera: CameraBuddle,
 }
 
-impl WgpuApp {
+impl WgpuApp for App {
     async fn new(window: Arc<Window>) -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -92,7 +77,7 @@ impl WgpuApp {
 
         let diffuse_bytes = include_bytes!("happy-tree.png");
         let diffuse_texture =
-            texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
+            Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
 
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -134,8 +119,7 @@ impl WgpuApp {
             label: Some("diffuse_bind_group"),
         });
 
-        let camera_controller = camera::CameraController::new(0.2);
-        let camera = camera::Camera {
+        let camera = Camera {
             // 将摄像机向上移动 1 个单位，向后移动 2 个单位
             // +z 朝向屏幕外
             eye: (0.0, 1.0, 2.0).into(),
@@ -148,37 +132,7 @@ impl WgpuApp {
             znear: 0.1,
             zfar: 100.0,
         };
-        let mut camera_uniform = camera::CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
-
-        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(&[camera_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX, // 1
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false, // 2
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-                label: Some("camera_bind_group_layout"),
-            });
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-            label: Some("camera_bind_group"),
-        });
+        let camera = CameraBuddle::new(camera, 0.2, &device);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
@@ -188,7 +142,7 @@ impl WgpuApp {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout, &camera_bind_group_layout],
+                bind_group_layouts: &[&texture_bind_group_layout, &camera.bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -198,8 +152,8 @@ impl WgpuApp {
             vertex: wgpu::VertexState {
                 module: &shader,
                 compilation_options: Default::default(),
-                entry_point: Some("vs_main"),       // 1.
-                buffers: &[vertex::Vertex::desc()], // 2.
+                entry_point: Some("vs_main"),                     // 1.
+                buffers: &[vertex::Vertex::buffer_layout_desc()], // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -235,21 +189,10 @@ impl WgpuApp {
             cache: None,
         });
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(vertex::VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(vertex::INDICES),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        let num_indices = vertex::INDICES.len() as u32;
+        let mut model = Model::new(vertex::VERTICES, vertex::INDICES, "simple model");
+        model.alloc_buffer(&device);
 
         Self {
-            window,
-
             device,
             queue,
 
@@ -261,45 +204,12 @@ impl WgpuApp {
 
             render_pipeline,
 
-            vertex_buffer,
-            index_buffer,
-            num_indices,
+            model,
 
             diffuse_bind_group,
 
             camera,
-            camera_controller,
-            camera_uniform,
-            camera_buffer,
-            camera_bind_group,
         }
-    }
-
-    /// 记录窗口大小已发生变化
-    ///
-    /// # NOTE:
-    /// 当缩放浏览器窗口时, 窗口大小会以高于渲染帧率的频率发生变化，
-    /// 如果窗口 size 发生变化就立即调整 surface 大小, 会导致缩放浏览器窗口大小时渲染画面闪烁。
-    fn set_window_resized(&mut self, new_size: PhysicalSize<u32>) {
-        if new_size == self.size {
-            return;
-        }
-        self.size = new_size;
-        self.size_changed = true;
-    }
-
-    /// 必要的时候调整 surface 大小
-    fn resize_surface_if_needed(&mut self) {
-        if self.size_changed {
-            self.surface_config.width = self.size.width;
-            self.surface_config.height = self.size.height;
-            self.surface.configure(&self.device, &self.surface_config);
-            self.size_changed = false;
-        }
-    }
-
-    fn keyboard_input(&mut self, event: &KeyEvent) -> bool {
-        self.camera_controller.process_events(event)
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -336,10 +246,14 @@ impl WgpuApp {
             });
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1); // 2.
+            render_pass.set_bind_group(1, &self.camera.bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.model.vertex_buffer.as_ref().unwrap().slice(..));
+            render_pass.set_index_buffer(
+                self.model.index_buffer.as_ref().unwrap().slice(..),
+                wgpu::IndexFormat::Uint32,
+            ); // 1.
+            render_pass.draw_indexed(0..(self.model.indices.len() as u32), 0, 0..1);
+            // 2.
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -348,89 +262,40 @@ impl WgpuApp {
         Ok(())
     }
 
-    fn update(&mut self) {
-        self.camera_controller.update_camera(&mut self.camera);
-        self.camera_uniform.update_view_proj(&self.camera);
-        self.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::cast_slice(&[self.camera_uniform]),
-        );
-    }
-}
-
-#[derive(Default)]
-struct WgpuAppHandler {
-    app: Arc<Mutex<Option<WgpuApp>>>,
-}
-
-impl ApplicationHandler for WgpuAppHandler {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.app.lock().unwrap().deref().is_some() {
+    /// 记录窗口大小已发生变化
+    ///
+    /// # NOTE:
+    /// 当缩放浏览器窗口时, 窗口大小会以高于渲染帧率的频率发生变化，
+    /// 如果窗口 size 发生变化就立即调整 surface 大小, 会导致缩放浏览器窗口大小时渲染画面闪烁。
+    fn set_window_resized(&mut self, new_size: PhysicalSize<u32>) {
+        if new_size == self.size {
             return;
         }
-
-        let rt = Runtime::new().unwrap();
-
-        let window_attributes = Window::default_attributes().with_title("triangle");
-        let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
-
-        let wgpu_app = rt.block_on(WgpuApp::new(window));
-
-        self.app.lock().unwrap().deref_mut().replace(wgpu_app);
+        self.size = new_size;
+        self.size_changed = true;
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        // 暂停事件
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        let mut guard = self.app.lock().unwrap();
-        let app = guard.as_mut().unwrap();
-
-        // 窗口事件
-        match event {
-            WindowEvent::CloseRequested => {
-                event_loop.exit();
-            }
-            WindowEvent::Resized(physical_size) => {
-                if physical_size.width == 0 || physical_size.height == 0 {
-                    // 处理最小化窗口的事件
-                } else {
-                    app.set_window_resized(physical_size);
-                }
-            }
-            WindowEvent::KeyboardInput { event, .. } => {
-                let _ = app.keyboard_input(&event);
-            }
-            WindowEvent::RedrawRequested => {
-                app.update();
-
-                // surface 重绘事件
-                app.window.pre_present_notify();
-
-                match app.render() {
-                    Ok(_) => {}
-                    // 当展示平面的上下文丢失，就需重新配置
-                    Err(wgpu::SurfaceError::Lost) => eprintln!("Surface is lost"),
-                    // 所有其他错误（过期、超时等）应在下一帧解决
-                    Err(e) => eprintln!("{e:?}"),
-                }
-                // 除非我们手动请求，RedrawRequested 将只会触发一次。
-                app.window.request_redraw();
-            }
-            _ => (),
+    /// 必要的时候调整 surface 大小
+    fn resize_surface_if_needed(&mut self) {
+        if self.size_changed {
+            self.surface_config.width = self.size.width;
+            self.surface_config.height = self.size.height;
+            self.surface.configure(&self.device, &self.surface_config);
+            self.size_changed = false;
         }
+    }
+
+    fn keyboard_input(&mut self, event: &KeyEvent) -> bool {
+        self.camera.controller.process_events(event)
+    }
+
+    fn update(&mut self) {
+        self.camera.update(&self.queue);
     }
 }
 
 fn main() -> Result<(), impl std::error::Error> {
     let events_loop = EventLoop::new().unwrap();
-    let mut app = WgpuAppHandler::default();
+    let mut app = WgpuAppHandler::<App>::new("camera example");
     events_loop.run_app(&mut app)
 }

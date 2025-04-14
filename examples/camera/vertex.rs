@@ -1,15 +1,18 @@
 use bytemuck::{Pod, Zeroable};
+use wgpu_dance::model::RenderVertex;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
     position: [f32; 3],
-    tex_coords: [f32; 2], // 新添加!
+    tex_coords: [f32; 2],
 }
+
 unsafe impl Zeroable for Vertex {}
 unsafe impl Pod for Vertex {}
-impl Vertex {
-    pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+
+impl RenderVertex for Vertex {
+    fn buffer_layout_desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         use core::mem;
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
@@ -23,7 +26,7 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2, // NEW!
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }
@@ -54,4 +57,4 @@ pub const VERTICES: &[Vertex] = &[
     }, // E
 ];
 
-pub const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
+pub const INDICES: &[u32] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
