@@ -13,7 +13,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-pub trait WgpuApp {
+pub trait WindowApp {
     fn new(window: Arc<Window>) -> impl Future<Output = Self>;
     fn set_window_resized(&mut self, new_size: PhysicalSize<u32>);
     fn resize_surface_if_needed(&mut self);
@@ -23,13 +23,13 @@ pub trait WgpuApp {
 }
 
 #[derive(Default)]
-pub struct WgpuAppHandler<A: WgpuApp> {
+pub struct WindowAppHandler<A: WindowApp> {
     app: Arc<Mutex<Option<A>>>,
     window: Option<Arc<Window>>,
     title: String,
 }
 
-impl<A: WgpuApp> WgpuAppHandler<A> {
+impl<A: WindowApp> WindowAppHandler<A> {
     pub fn new(title: &str) -> Self {
         Self {
             app: Arc::new(Mutex::new(None)),
@@ -51,7 +51,7 @@ impl<A: WgpuApp> WgpuAppHandler<A> {
     }
 }
 
-impl<A: WgpuApp> ApplicationHandler for WgpuAppHandler<A> {
+impl<A: WindowApp> ApplicationHandler for WindowAppHandler<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.app.lock().unwrap().deref().is_some() {
             return;
@@ -68,9 +68,7 @@ impl<A: WgpuApp> ApplicationHandler for WgpuAppHandler<A> {
         self.window.replace(window);
     }
 
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        // 暂停事件
-    }
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {}
 
     fn window_event(
         &mut self,
@@ -81,7 +79,6 @@ impl<A: WgpuApp> ApplicationHandler for WgpuAppHandler<A> {
         let mut guard = self.app.lock().unwrap();
         let app = guard.as_mut().unwrap();
 
-        // 窗口事件
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
@@ -99,7 +96,6 @@ impl<A: WgpuApp> ApplicationHandler for WgpuAppHandler<A> {
             WindowEvent::RedrawRequested => {
                 app.update();
 
-                // surface 重绘事件
                 self.pre_present_notify();
 
                 match app.render() {
@@ -109,6 +105,7 @@ impl<A: WgpuApp> ApplicationHandler for WgpuAppHandler<A> {
                     // 所有其他错误（过期、超时等）应在下一帧解决
                     Err(e) => eprintln!("{e:?}"),
                 }
+
                 // 除非我们手动请求，RedrawRequested 将只会触发一次。
                 self.request_redraw();
             }

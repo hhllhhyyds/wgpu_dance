@@ -1,7 +1,9 @@
+pub mod instance;
 pub mod vertex;
 
 use std::sync::Arc;
 
+use wgpu::util::DeviceExt;
 use wgpu_dance::{
     app::{WindowApp, WindowAppHandler},
     camera::{Camera, CameraBuddle},
@@ -10,6 +12,13 @@ use wgpu_dance::{
 };
 
 use winit::{dpi::PhysicalSize, event::KeyEvent, event_loop::EventLoop, window::Window};
+
+const NUM_INSTANCES_PER_ROW: u32 = 10;
+const INSTANCE_DISPLACEMENT: glam::Vec3 = glam::Vec3::new(
+    NUM_INSTANCES_PER_ROW as f32 * 0.5,
+    0.0,
+    NUM_INSTANCES_PER_ROW as f32 * 0.5,
+);
 
 struct App {
     device: wgpu::Device,
@@ -24,6 +33,8 @@ struct App {
     render_pipeline: wgpu::RenderPipeline,
 
     model: Model<vertex::Vertex>,
+    instances: Vec<instance::Instance>,
+    instance_buffer: wgpu::Buffer,
 
     diffuse_bind_group: wgpu::BindGroup,
 
@@ -152,8 +163,11 @@ impl WindowApp for App {
             vertex: wgpu::VertexState {
                 module: &shader,
                 compilation_options: Default::default(),
-                entry_point: Some("vs_main"),                     // 1.
-                buffers: &[vertex::Vertex::buffer_layout_desc()], // 2.
+                entry_point: Some("vs_main"), // 1.
+                buffers: &[
+                    vertex::Vertex::buffer_layout_desc(),
+                    instance::InstanceRaw::buffer_layout_desc(),
+                ], // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -192,6 +206,40 @@ impl WindowApp for App {
         let mut model = Model::new(vertex::VERTICES, vertex::INDICES, "simple model");
         model.alloc_buffer(&device);
 
+        let instances = (0..NUM_INSTANCES_PER_ROW)
+            .flat_map(|z| {
+                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+                    let position = glam::Vec3 {
+                        x: x as f32,
+                        y: 0.0,
+                        z: z as f32,
+                    } - INSTANCE_DISPLACEMENT;
+
+                    let rotation = if position.length().abs() <= f32::EPSILON {
+                        // 这一行特殊确保在坐标 (0, 0, 0) 处的对象不会被缩放到 0
+                        // 因为错误的四元数会影响到缩放
+                        glam::Quat::from_axis_angle(glam::Vec3::Z, 0.0)
+                    } else {
+                        glam::Quat::from_axis_angle(
+                            position.normalize(),
+                            std::f32::consts::FRAC_PI_4,
+                        )
+                    };
+
+                    instance::Instance { position, rotation }
+                })
+            })
+            .collect::<Vec<_>>();
+        let instance_data = instances
+            .iter()
+            .map(instance::Instance::to_raw)
+            .collect::<Vec<_>>();
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
         Self {
             device,
             queue,
@@ -205,6 +253,8 @@ impl WindowApp for App {
             render_pipeline,
 
             model,
+            instances,
+            instance_buffer,
 
             diffuse_bind_group,
 
@@ -247,11 +297,16 @@ impl WindowApp for App {
         render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
         render_pass.set_bind_group(1, &self.camera.bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.model.vertex_buffer.as_ref().unwrap().slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         render_pass.set_index_buffer(
             self.model.index_buffer.as_ref().unwrap().slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        render_pass.draw_indexed(0..(self.model.indices.len() as u32), 0, 0..1);
+        render_pass.draw_indexed(
+            0..(self.model.indices.len() as _),
+            0,
+            0..(self.instances.len() as _),
+        );
 
         drop(render_pass);
 
