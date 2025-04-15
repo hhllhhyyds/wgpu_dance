@@ -17,6 +17,9 @@ const SPACE_BETWEEN: f32 = 3.0;
 const NUM_INSTANCES_PER_ROW: u32 = 10;
 
 struct App {
+    frame_count: usize,
+    last_record_time: std::time::Instant,
+
     device: wgpu::Device,
     queue: wgpu::Queue,
 
@@ -205,6 +208,9 @@ impl WindowApp for App {
         });
 
         Self {
+            frame_count: 0,
+            last_record_time: std::time::Instant::now(),
+
             device,
             queue,
 
@@ -312,6 +318,18 @@ impl WindowApp for App {
     }
 
     fn update(&mut self) {
+        self.frame_count += 1;
+
+        if self.frame_count == 100 {
+            let now = std::time::Instant::now();
+            let duration = now - self.last_record_time;
+            self.last_record_time = now;
+            self.frame_count = 0;
+            let second_per_frame = duration.as_secs_f32() / 100.;
+            let frame_rate = 1. / second_per_frame;
+            println!("frame rate = {:.2}", frame_rate);
+        }
+
         self.camera.update(&self.queue);
     }
 }
