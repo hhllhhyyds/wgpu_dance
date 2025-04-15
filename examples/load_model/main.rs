@@ -82,31 +82,6 @@ impl WindowApp for App {
         };
         surface.configure(&device, &surface_config);
 
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        // This should match the filterable field of the
-                        // corresponding Texture entry above.
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-                label: Some("texture_bind_group_layout"),
-            });
-
         let camera = Camera {
             // 将摄像机向上移动 1 个单位，向后移动 2 个单位
             // +z 朝向屏幕外
@@ -133,38 +108,38 @@ impl WindowApp for App {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout, &camera.bind_group_layout],
+                bind_group_layouts: &[
+                    &camera.bind_group_layout,
+                    &Texture::texture_bind_group_layout(&device),
+                ],
                 push_constant_ranges: &[],
             });
-
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 compilation_options: Default::default(),
-                entry_point: Some("vs_main"), // 1.
+                entry_point: Some("vs_main"),
                 buffers: &[
-                    vertex::Vertex::buffer_layout_desc(),
                     instance::InstanceRaw::buffer_layout_desc(),
-                ], // 2.
+                    vertex::Vertex::buffer_layout_desc(),
+                ],
             },
             fragment: Some(wgpu::FragmentState {
-                // 3.
                 module: &shader,
                 compilation_options: Default::default(),
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    // 4.
                     format: surface_config.format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw, // 2.
+                front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(wgpu::Face::Back),
                 // 将此设置为 Fill 以外的任何值都要需要开启 Feature::NON_FILL_POLYGON_MODE
                 polygon_mode: wgpu::PolygonMode::Fill,
@@ -176,22 +151,27 @@ impl WindowApp for App {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: Texture::DEPTH_FORMAT,
                 depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less, // 1.
-                stencil: wgpu::StencilState::default(),     // 2.
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState {
-                count: 1,                         // 2.
-                mask: !0,                         // 3.
-                alpha_to_coverage_enabled: false, // 4.
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
             },
-            multiview: None, // 5.
+            multiview: None,
             cache: None,
         });
 
-        let obj_model = vertex::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
-            .await
-            .unwrap();
+        let obj_model = MeshModel::load_model::<vertex::Vertex>(
+            "cube.obj",
+            &device,
+            &queue,
+            &Texture::texture_bind_group_layout(&device),
+        )
+        .await
+        .unwrap();
 
         let instances = (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
@@ -234,15 +214,16 @@ impl WindowApp for App {
             size,
             size_changed: false,
 
-            render_pipeline,
-
-            obj_model,
-            instances,
-            instance_buffer,
+            camera,
 
             depth_texture,
 
-            camera,
+            render_pipeline,
+
+            obj_model,
+
+            instances,
+            instance_buffer,
         }
     }
 
@@ -286,7 +267,7 @@ impl WindowApp for App {
             ..Default::default()
         });
         render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        render_pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
         render_pass.draw_model_instanced(
             &self.obj_model,
             0..self.instances.len() as u32,

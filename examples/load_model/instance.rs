@@ -25,6 +25,7 @@ pub struct InstanceRaw {
 
 unsafe impl Zeroable for InstanceRaw {}
 unsafe impl Pod for InstanceRaw {}
+
 impl RenderVertex for InstanceRaw {
     fn buffer_layout_desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         use core::mem;
@@ -38,24 +39,24 @@ impl RenderVertex for InstanceRaw {
                     offset: 0,
                     // 虽然顶点着色器现在只使用了插槽 0 和 1，但在后面的教程中将会使用 2、3 和 4
                     // 此处从插槽 5 开始，确保与后面的教程不会有冲突
-                    shader_location: 5,
+                    shader_location: 0,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 // mat4 从技术的角度来看是由 4 个 vec4 构成，占用 4 个插槽。
                 // 我们需要为每个 vec4 定义一个插槽，然后在着色器中重新组装出 mat4。
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-                    shader_location: 6,
+                    shader_location: 1,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
-                    shader_location: 7,
+                    shader_location: 2,
                     format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
-                    shader_location: 8,
+                    shader_location: 3,
                     format: wgpu::VertexFormat::Float32x4,
                 },
             ],
