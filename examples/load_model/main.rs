@@ -7,18 +7,14 @@ use wgpu::util::DeviceExt;
 use wgpu_dance::{
     app::{WindowApp, WindowAppHandler},
     camera::{Camera, CameraBuddle},
-    model::{Model, RenderVertex},
+    model::{DrawModel, MeshModel, RenderVertex},
     texture::Texture,
 };
 
 use winit::{dpi::PhysicalSize, event::KeyEvent, event_loop::EventLoop, window::Window};
 
+const SPACE_BETWEEN: f32 = 3.0;
 const NUM_INSTANCES_PER_ROW: u32 = 10;
-const INSTANCE_DISPLACEMENT: glam::Vec3 = glam::Vec3::new(
-    NUM_INSTANCES_PER_ROW as f32 * 0.5,
-    0.0,
-    NUM_INSTANCES_PER_ROW as f32 * 0.5,
-);
 
 struct App {
     device: wgpu::Device,
@@ -32,11 +28,10 @@ struct App {
 
     render_pipeline: wgpu::RenderPipeline,
 
-    model: Model<vertex::Vertex>,
+    obj_model: MeshModel,
     instances: Vec<instance::Instance>,
     instance_buffer: wgpu::Buffer,
 
-    diffuse_bind_group: wgpu::BindGroup,
     depth_texture: Texture,
 
     camera: CameraBuddle,
@@ -87,10 +82,6 @@ impl WindowApp for App {
         };
         surface.configure(&device, &surface_config);
 
-        let diffuse_bytes = include_bytes!("happy-tree.png");
-        let diffuse_texture =
-            Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
-
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -115,21 +106,6 @@ impl WindowApp for App {
                 ],
                 label: Some("texture_bind_group_layout"),
             });
-
-        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                },
-            ],
-            label: Some("diffuse_bind_group"),
-        });
 
         let camera = Camera {
             // 将摄像机向上移动 1 个单位，向后移动 2 个单位
@@ -213,21 +189,19 @@ impl WindowApp for App {
             cache: None,
         });
 
-        let mut model = Model::new(vertex::VERTICES, vertex::INDICES, "simple model");
-        model.alloc_buffer(&device);
+        let obj_model = vertex::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
+            .await
+            .unwrap();
 
         let instances = (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
                 (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                    let position = glam::Vec3 {
-                        x: x as f32,
-                        y: 0.0,
-                        z: z as f32,
-                    } - INSTANCE_DISPLACEMENT;
+                    let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                    let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+
+                    let position = glam::Vec3 { x, y: 0.0, z };
 
                     let rotation = if position.length().abs() <= f32::EPSILON {
-                        // 这一行特殊确保在坐标 (0, 0, 0) 处的对象不会被缩放到 0
-                        // 因为错误的四元数会影响到缩放
                         glam::Quat::from_axis_angle(glam::Vec3::Z, 0.0)
                     } else {
                         glam::Quat::from_axis_angle(
@@ -262,11 +236,10 @@ impl WindowApp for App {
 
             render_pipeline,
 
-            model,
+            obj_model,
             instances,
             instance_buffer,
 
-            diffuse_bind_group,
             depth_texture,
 
             camera,
@@ -313,18 +286,11 @@ impl WindowApp for App {
             ..Default::default()
         });
         render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-        render_pass.set_bind_group(1, &self.camera.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, self.model.vertex_buffer.as_ref().unwrap().slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        render_pass.set_index_buffer(
-            self.model.index_buffer.as_ref().unwrap().slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        render_pass.draw_indexed(
-            0..(self.model.indices.len() as _),
-            0,
-            0..(self.instances.len() as _),
+        render_pass.draw_model_instanced(
+            &self.obj_model,
+            0..self.instances.len() as u32,
+            &self.camera.bind_group,
         );
 
         drop(render_pass);
