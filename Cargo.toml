@@ -17,7 +17,7 @@ tokio = {version = "1.44.2", features = ["rt-multi-thread"]}
 bytemuck = "1.22.0"
 
 anyhow = "1.0"
-glam = "0.30"
+glam = {version = "0.30", features = ["glam-assert"]}
 
 tobj = { version = "3.2", features = [
     "async",
